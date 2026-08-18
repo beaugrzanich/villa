@@ -61,7 +61,11 @@ def load_dataset(dataset_dir):
     for entry in sorted(os.listdir(patches_dir)):
         patch = load_tifxyz(os.path.join(patches_dir, entry))
         if not isinstance(patch.winding, torch.Tensor):
-            raise click.UsageError(f'{entry} has no per-vertex winding annotation')
+            raise click.UsageError(
+                f'{entry} has no per-vertex winding annotation. Note that an '
+                f'all-zero winding.tif is read as the "single" sentinel by '
+                f'tifxyz; shift indices so no winding is 0 (the offset is a '
+                f'gauge freedom).')
         # Sparse grids mark missing cells with the -1 sentinel; training on
         # those would anchor the fit to garbage coordinates (phantom exports
         # are fully valid, so this only bites on real traced data).

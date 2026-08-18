@@ -131,8 +131,14 @@ def index_fragments(tracks, dr, thetas, num_angles, delta=None):
 @click.option('--theta-step', default=3, type=int, help='Grid column spacing, degrees.')
 @click.option('--min-coverage', default=0.15, type=float,
               help='Drop winding grids with fewer valid cells than this fraction.')
+@click.option('--match-tol', default=2.5, type=float,
+              help='Peak-to-track radius matching tolerance, vox.')
+@click.option('--max-ray-gap', default=6, type=int,
+              help='Rays a track may skip before it is closed.')
+@click.option('--min-arc', default=40, type=int,
+              help='Minimum fragment arc, degrees.')
 def main(volume_url, level, z0, z_size, slab_cache, mirror_x, out, r_min, r_max,
-         z_step, theta_step, min_coverage):
+         z_step, theta_step, min_coverage, match_tol, max_ray_gap, min_arc):
     slab = fetch_slab(volume_url, level, z0, z_size, slab_cache)
     if mirror_x:
         slab = slab[:, :, ::-1].copy()
@@ -144,8 +150,9 @@ def main(volume_url, level, z0, z_size, slab_cache, mirror_x, out, r_min, r_max,
     num_angles = 360
     thetas = np.deg2rad(np.arange(num_angles))
     radii_samples = np.arange(r_min, r_max, 0.5)
-    trace_kwargs = dict(thetas=thetas, radii_samples=radii_samples, match_tol=2.5,
-                        max_ray_gap=6, min_arc=40, peak_distance=8, peak_prominence=10)
+    trace_kwargs = dict(thetas=thetas, radii_samples=radii_samples, match_tol=match_tol,
+                        max_ray_gap=max_ray_gap, min_arc=min_arc,
+                        peak_distance=8, peak_prominence=10)
 
     # dr: median peak-to-peak spacing with the SAME detector the tracker uses
     # (autocorrelation latches onto the coarser pack-bunching scale instead).
@@ -195,12 +202,16 @@ def main(volume_url, level, z0, z_size, slab_cache, mirror_x, out, r_min, r_max,
         json.dump({'control_points': [
             {'z': float(z), 'y': float(centroids[z][0]), 'x': float(centroids[z][1])}
             for z in range(Z)]}, f)
+    # tifxyz reads an all-zero winding.tif as the 'single' sentinel, so a w0
+    # surface would silently lose its annotation; the absolute offset is a
+    # gauge freedom (fitters estimate gauge), so shift all indices positive.
+    shift = 1 - min(surfaces) if surfaces and min(surfaces) < 1 else 0
     for k, grid in surfaces.items():
-        uuid = f'traced_w{k:03d}'
+        uuid = f'traced_w{k + shift:03d}'
         save_tifxyz(grid, patches_dir, uuid, step_size=4,
                     voxel_size_um=7.91 * 2 ** level, source='trace_real_windings')
         tifffile.imwrite(os.path.join(patches_dir, uuid, 'winding.tif'),
-                         np.full(grid.shape[:2], float(k), dtype=np.float32))
+                         np.full(grid.shape[:2], float(k + shift), dtype=np.float32))
 
     coverage = float(np.mean([(g[..., 0] >= 0).mean() for g in surfaces.values()]))
     with open(os.path.join(out, 'dataset_meta.json'), 'w') as f:
@@ -210,8 +221,9 @@ def main(volume_url, level, z0, z_size, slab_cache, mirror_x, out, r_min, r_max,
             'source': {'volume_url': volume_url, 'level': level, 'z0': z0,
                        'z_size': z_size, 'mirror_x': mirror_x},
             'phantom_meta': {'z_size': int(Z), 'yx_size': int(max(H, W)),
-                             'dr_per_winding': dr, 'first_winding': 0,
-                             'last_winding': int(max(surfaces))},
+                             'dr_per_winding': dr,
+                             'first_winding': int(min(surfaces) + shift),
+                             'last_winding': int(max(surfaces) + shift)},
         }, f, indent=2)
     click.echo(f'{len(surfaces)} winding surfaces -> {out} '
                f'(mean coverage {coverage:.2f}, dr {dr:.2f})')
